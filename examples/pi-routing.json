@@ -1,0 +1,16 @@
+{
+  "tiers": {
+    "simple": {
+      "general": ["openai-codex:gpt-6-luna", "openai-codex:gpt-5.6-luna"],
+      "coding": ["openai-codex:gpt-6-luna", "openai-codex:gpt-5.6-luna"]
+    },
+    "medium": {
+      "general": ["xai:grok-4.7", "xai:grok-4.6"],
+      "coding": ["xai:grok-4.7", "xai:grok-4.6"]
+    },
+    "hard": {
+      "general": ["openai-codex:gpt-6-sol", "claude-bridge:claude-opus-5"],
+      "coding": ["openai-codex:gpt-6-sol", "claude-bridge:claude-opus-5"]
+    }
+  }
+}

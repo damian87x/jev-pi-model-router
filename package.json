@@ -1,0 +1,41 @@
+{
+  "name": "jev-pi-model-router",
+  "version": "0.2.0",
+  "description": "pi extension: TypeSafe Jev picks the model for each fresh user turn, only from models pi can use",
+  "type": "module",
+  "license": "MIT",
+  "author": "Damian Borek",
+  "homepage": "https://github.com/damian87x/jev-pi-model-router#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/damian87x/jev-pi-model-router.git"
+  },
+  "bugs": {
+    "url": "https://github.com/damian87x/jev-pi-model-router/issues"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "jev",
+    "typesafe",
+    "model-routing"
+  ],
+  "files": [
+    "extensions/",
+    "src/",
+    "examples/",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/router.js"
+    ]
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}
