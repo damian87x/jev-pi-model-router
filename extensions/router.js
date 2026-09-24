@@ -1,28 +1,17 @@
-import { spawn } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join } from "node:path";
-import { piConfig } from "../src/pools.mjs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { apiKey, ask } from "../src/jev.mjs";
+import { missing, usableModels } from "../src/pools.mjs";
+import { classify, pick, prepare, QUESTIONS, risky, stickyKeep } from "../src/route.mjs";
 import { applyCommand, loadState, onModelSelect, shouldRoute, shouldSwitch } from "../src/state.mjs";
 
-const JEV_DIR = join(homedir(), ".config", "jev");
-const STATE = join(JEV_DIR, "pi-router.json");
-// Your own pi pools, if you want them. Otherwise the Hermes pools, rewritten to what pi has.
-const PI_POOLS = join(JEV_DIR, "pi-routing.json");
-const EFFECTIVE = join(JEV_DIR, "pi-routing.effective.json");
-
-function read() {
-  try {
-    return loadState(readFileSync(STATE, "utf8"));
-  } catch {
-    return loadState("");
-  }
-}
-
-function write(state) {
-  mkdirSync(dirname(STATE), { recursive: true });
-  writeFileSync(STATE, `${JSON.stringify(state)}\n`);
-}
+const DIR = join(homedir(), ".pi", "agent", "jev-model-router");
+const STATE = join(DIR, "state.json");
+const POOLS = join(DIR, "pools.json"); // your pools; otherwise the package defaults
+const DEFAULT_POOLS = join(dirname(fileURLToPath(import.meta.url)), "..", "pools.default.json");
+const OLD_STATE = join(homedir(), ".config", "jev", "pi-router.json"); // 0.1/0.2 location
 
 function readJson(path) {
   try {
@@ -33,73 +22,41 @@ function readJson(path) {
   }
 }
 
-/** Same layering as jevkit's load_config: shared file first, a Hermes profile's own file last. */
-function sourceConfig() {
-  const own = readJson(PI_POOLS);
-  if (own) return own;
-  const home = process.env.HERMES_HOME || join(homedir(), ".hermes");
-  const root = basename(dirname(home)) === "profiles" ? dirname(dirname(home)) : home;
-  const paths = [join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "jev", "routing.json"), join(root, "jev", "routing.json")];
-  if (home !== root) paths.push(join(home, "jev", "routing.json"));
-  let config = null;
-  for (const path of paths) {
-    const layer = readJson(path);
-    if (!layer) continue;
-    const tiers = { ...(config?.tiers || {}), ...(layer.tiers && typeof layer.tiers === "object" ? layer.tiers : {}) };
-    config = { ...(config || {}), ...layer, tiers };
-  }
-  return config;
-}
-
-/** Writes the pi-only pools for `jev route`; returns what pi could not use. */
-function writePiPools(modelRegistry) {
-  const source = sourceConfig();
-  if (!source) return null;
-  const available = new Set(modelRegistry.getAvailable().map((m) => `${m.provider}:${m.id}`));
-  const { config, dropped } = piConfig(source, available);
-  const text = `${JSON.stringify(config, null, 2)}\n`;
-  let old = "";
+function read() {
+  const path = existsSync(STATE) ? STATE : OLD_STATE;
   try {
-    old = readFileSync(EFFECTIVE, "utf8");
-  } catch {}
-  if (old !== text) {
-    mkdirSync(JEV_DIR, { recursive: true });
-    writeFileSync(EFFECTIVE, text);
+    return loadState(readFileSync(path, "utf8"));
+  } catch {
+    return loadState("");
   }
-  return dropped;
 }
 
-function ask(payload, poolsReady) {
-  return new Promise((resolve) => {
-    const env = poolsReady ? { ...process.env, JEV_ROUTING_CONFIG: EFFECTIVE } : process.env;
-    const child = spawn("jev", ["route", "--timeout", "2.5"], { stdio: ["pipe", "pipe", "ignore"], env });
-    let out = "";
-    const timer = setTimeout(() => {
-      child.kill();
-      resolve(null);
-    }, 3500);
-    child.stdout.on("data", (chunk) => {
-      out += chunk;
-    });
-    child.on("error", () => {
-      clearTimeout(timer);
-      resolve(null);
-    });
-    child.on("close", () => {
-      clearTimeout(timer);
-      try {
-        resolve(JSON.parse(out));
-      } catch {
-        resolve(null);
-      }
-    });
-    child.stdin.end(JSON.stringify(payload));
-  });
+function write(state) {
+  mkdirSync(DIR, { recursive: true });
+  writeFileSync(STATE, `${JSON.stringify(state)}\n`);
+}
+
+/** {config, source}: your pools file if it parses, else the shipped defaults. */
+function loadPools() {
+  const own = readJson(POOLS);
+  if (own?.tiers) return { config: own, source: POOLS };
+  return { config: readJson(DEFAULT_POOLS) || { tiers: {} }, source: "defaults" };
+}
+
+// A repeated instruction (a queued or scheduled turn) is judged once.
+const answersCache = new Map();
+
+async function judge(text, cwd) {
+  if (answersCache.has(text)) return answersCache.get(text);
+  const answers = await ask({ user_turn: text }, QUESTIONS, { key: apiKey(cwd) });
+  answersCache.set(text, answers);
+  if (answersCache.size > 256) answersCache.delete(answersCache.keys().next().value);
+  return answers;
 }
 
 export default function (pi) {
   let warned = false;
-  let droppedWarned = false;
+  let missingWarned = false;
   let ready = false;
   let applying = false;
 
@@ -109,9 +66,9 @@ export default function (pi) {
       const before = read();
       const next = applyCommand(before, args);
       if (next !== before) write(next);
-      const state = next;
-      const model = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "none";
-      ctx.ui.notify(`Jev ${state.mode}${state.pinned ? " pinned" : ""} · ${model}`, "info");
+      const model = ctx.model ? `${ctx.model.provider}:${ctx.model.id}` : "none";
+      const { source } = loadPools();
+      ctx.ui.notify(`Jev ${next.mode}${next.pinned ? " pinned" : ""} · ${model} · pools: ${source}`, "info");
     },
   });
 
@@ -120,52 +77,72 @@ export default function (pi) {
   });
 
   pi.on("model_select", async (event) => {
-    const next = onModelSelect(read(), { source: event.source, applying, ready });
-    if (next !== read() && next.pinned) write(next);
+    const state = read();
+    const next = onModelSelect(state, { source: event.source, applying, ready });
+    if (next !== state && next.pinned) write(next);
   });
 
   pi.on("before_agent_start", async (event, ctx) => {
     ready = true;
     const state = read();
-    if (!shouldRoute(state) || !event.prompt?.trim()) return;
-    const current = ctx.model ? `${ctx.model.provider}:${ctx.model.id}` : "";
-    let dropped = null;
-    try {
-      dropped = writePiPools(ctx.modelRegistry);
-    } catch {}
-    if (dropped?.length && !droppedWarned) {
-      droppedWarned = true;
-      ctx.ui.notify(`Jev router: pi has no ${dropped.join(", ")}; left out of routing`, "info");
+    const prompt = event.prompt || "";
+    if (!shouldRoute(state) || !prompt.trim()) return;
+
+    const { config } = loadPools();
+    const models = usableModels(ctx.modelRegistry.getAvailable());
+    const absent = missing(config.tiers, models);
+    if (absent.length && !missingWarned) {
+      missingWarned = true;
+      ctx.ui.notify(`Jev router: pi cannot use ${absent.join(", ")}; skipped`, "info");
     }
-    const decision = await ask({
-      prompt: event.prompt,
-      current,
-      context_tokens: ctx.getContextUsage()?.tokens ?? 0,
-      has_images: !!event.images?.length,
-    }, dropped !== null);
-    if (!decision) {
+
+    const current = ctx.model ? `${ctx.model.provider}:${ctx.model.id}` : "";
+    let answers;
+    try {
+      answers = await judge(prepare(prompt, config.ask_chars), ctx.cwd || process.cwd());
+    } catch (e) {
       if (!warned) {
         warned = true;
-        ctx.ui.notify("Jev router: no decision, kept current model", "warning");
+        ctx.ui.notify(`Jev router: no decision (${e.message}), kept current model`, "warning");
       }
       return;
     }
-    if (!shouldSwitch(state, decision)) {
-      if (state.mode === "shadow") ctx.ui.notify(decision.notice || decision.reason, "info");
+
+    const verdict = classify(answers, { risk: risky(prompt), config });
+    if (verdict.keep) {
+      if (state.mode === "shadow") ctx.ui.notify(`[Jev] kept ${current} · ${verdict.keep}`, "info");
       return;
     }
-    const model = ctx.modelRegistry.find(decision.provider, decision.model_id);
-    if (!model) {
-      ctx.ui.notify(`${decision.notice} · not available`, "warning");
+    const contextTokens = ctx.getContextUsage()?.tokens ?? 0;
+    const picked = pick(config.tiers, models, {
+      tier: verdict.tier,
+      specialty: verdict.specialty,
+      images: !!event.images?.length,
+      contextTokens,
+    });
+    const label = `[Jev] ${verdict.tier} · ${verdict.specialty}`;
+    if (!picked) {
+      ctx.ui.notify(`${label} · no pi model fits, kept ${current}`, "info");
+      return;
+    }
+    if (stickyKeep(ctx.model, models.get(picked), contextTokens, config)) {
+      ctx.ui.notify(`${label} · large context, kept ${current}`, "info");
+      return;
+    }
+    const [provider, modelId] = [picked.slice(0, picked.indexOf(":")), picked.slice(picked.indexOf(":") + 1)];
+    const notice = `${label} → ${modelId} · confidence ${verdict.confidence.toFixed(2)}`;
+    const decision = { routed: picked !== current, provider, model_id: modelId };
+    if (!shouldSwitch(state, decision)) {
+      if (state.mode === "shadow") ctx.ui.notify(notice, "info");
       return;
     }
     applying = true;
     let ok = false;
     try {
-      ok = await pi.setModel(model);
+      ok = await pi.setModel(models.get(picked));
     } finally {
       applying = false;
     }
-    ctx.ui.notify(ok ? decision.notice : `${decision.notice} · no auth, kept ${current}`, ok ? "info" : "warning");
+    ctx.ui.notify(ok ? notice : `${notice} · no auth, kept ${current}`, ok ? "info" : "warning");
   });
 }

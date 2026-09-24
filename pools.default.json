@@ -9,8 +9,8 @@
       "coding": ["xai:grok-4.7", "xai:grok-4.6"]
     },
     "hard": {
-      "general": ["openai-codex:gpt-6-sol", "claude-bridge:claude-opus-5"],
-      "coding": ["openai-codex:gpt-6-sol", "claude-bridge:claude-opus-5"]
+      "general": ["openai-codex:gpt-6-sol", "openai-codex:gpt-6-astra"],
+      "coding": ["openai-codex:gpt-6-sol", "xai:grok-4.6"]
     }
   }
 }

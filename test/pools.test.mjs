@@ -1,37 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { piConfig, toPi } from "../src/pools.mjs";
+import { missing, usableModels } from "../src/pools.mjs";
 
-// What pi 0.85 lists on this machine, and the Hermes pools that sent it to models it lacks.
-const available = new Set(["openai-codex:gpt-6-luna", "openai-codex:gpt-6-sol", "openai-codex:gpt-5.3-codex-spark", "xai:grok-4.7"]);
-const hermes = {
-  min_confidence: 0.6,
-  tiers: {
-    simple: { general: ["openai:gpt-6-luna"] },
-    medium: { coding: ["xai:grok-4.7"] },
-    hard: { coding: ["openai:gpt-5.3-codex", "openai:gpt-5.3-codex-spark", "openai:gpt-6-sol"], vision: ["openai:gpt-5.3-codex"] },
-  },
-};
+const m = (provider, id) => ({ provider, id, input: ["text"], contextWindow: 272000 });
 
-test("Hermes provider names map to pi's, but only to models pi has", () => {
-  assert.equal(toPi("openai:gpt-6-luna", available), "openai-codex:gpt-6-luna");
-  assert.equal(toPi("xai:grok-4.7", available), "xai:grok-4.7");
-  assert.equal(toPi("openai:gpt-5.3-codex", available), null);
-  assert.equal(toPi("no-colon", available), null);
+test("only models pi reports, minus forbidden providers", () => {
+  const models = usableModels([m("openai-codex", "gpt-6-luna"), m("claude-bridge", "claude-opus-5"), m("github-copilot", "gpt-6-sol")]);
+  assert.deepEqual([...models.keys()], ["openai-codex:gpt-6-luna"]);
 });
 
-test("pools keep order, drop what pi lacks, and keep the other settings", () => {
-  const { config, dropped } = piConfig(hermes, available);
-  assert.deepEqual(config.tiers.simple.general, ["openai-codex:gpt-6-luna"]);
-  assert.deepEqual(config.tiers.hard.coding, ["openai-codex:gpt-5.3-codex-spark", "openai-codex:gpt-6-sol"]);
-  assert.equal(config.tiers.hard.vision, undefined, "an emptied pool is removed so jev falls through to general");
-  assert.deepEqual(dropped, ["openai:gpt-5.3-codex"]);
-  assert.equal(config.min_confidence, 0.6);
-});
-
-test("nothing is ever routed outside what pi can call", () => {
-  const { config } = piConfig(hermes, available);
-  for (const pools of Object.values(config.tiers)) {
-    for (const refs of Object.values(pools)) for (const ref of refs) assert.ok(available.has(ref), ref);
-  }
+test("pool entries pi cannot use are named once", () => {
+  const models = usableModels([m("xai", "grok-4.7")]);
+  const pools = { medium: { general: ["xai:grok-4.7", "openai:gpt-5.3-codex"], coding: ["openai:gpt-5.3-codex"] } };
+  assert.deepEqual(missing(pools, models), ["openai:gpt-5.3-codex"]);
 });

@@ -20,10 +20,11 @@ export function pin(state) {
   return { ...state, pinned: true };
 }
 
-/** Startup and our own setModel both emit source "set". Only a later user pick pins. */
+/** Pi emits source "set" for runtime switches, not only /model. Pinning on it
+ *  turned routing back off immediately after `/jev routing on`. Only the cycle key pins. */
 export function onModelSelect(state, { source, applying, ready }) {
   if (applying || !ready) return state;
-  if (source === "set" || source === "cycle") return pin(state);
+  if (source === "cycle") return pin(state);
   return state;
 }
 

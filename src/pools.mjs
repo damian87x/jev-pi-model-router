@@ -1,37 +1,27 @@
-// Pools for pi. Hermes pools use Hermes provider names and list models pi may not have,
-// so `jev route` picked models pi could never switch to. Keep only what pi can call.
+// Pools come from pi only: your pools file, or the defaults shipped with this package,
+// always filtered to models pi reports as available.
 
-/** Hermes provider name -> pi provider name, tried only when the Hermes ref itself is not in pi. */
-export const ALIASES = { openai: "openai-codex", anthropic: "claude-bridge", moonshot: "kimi-coding" };
+/** Never route here: Copilot is not a pi provider; the Claude bridge is a flag risk. */
+export const FORBIDDEN = new Set(["github-copilot", "claude-bridge", "anthropic"]);
 
-/** One pool entry in pi terms, or null when pi has no such model. */
-export function toPi(ref, available) {
-  if (typeof ref !== "string" || !ref.includes(":")) return null;
-  if (available.has(ref)) return ref;
-  const [provider, model] = [ref.slice(0, ref.indexOf(":")), ref.slice(ref.indexOf(":") + 1)];
-  const alias = ALIASES[provider] && `${ALIASES[provider]}:${model}`;
-  return alias && available.has(alias) ? alias : null;
+/** pi's available models keyed "provider:id", minus forbidden providers. */
+export function usableModels(available) {
+  const out = new Map();
+  for (const m of available || []) {
+    if (m && !FORBIDDEN.has(m.provider)) out.set(`${m.provider}:${m.id}`, m);
+  }
+  return out;
 }
 
-/** The routing config with every pool rewritten to pi refs; entries pi lacks are dropped. */
-export function piConfig(config, available) {
-  const tiers = {};
-  const dropped = [];
-  for (const [tier, pools] of Object.entries(config?.tiers || {})) {
-    if (!pools || typeof pools !== "object") continue;
-    tiers[tier] = {};
-    for (const [name, listed] of Object.entries(pools)) {
-      const kept = [];
-      for (const ref of Array.isArray(listed) ? listed : []) {
-        const mapped = toPi(ref, available);
-        if (mapped) {
-          if (!kept.includes(mapped)) kept.push(mapped);
-        } else if (!dropped.includes(ref)) {
-          dropped.push(ref);
-        }
+/** Pool entries pi cannot use, so they can be named once instead of silently skipped. */
+export function missing(pools, models) {
+  const out = [];
+  for (const tierPools of Object.values(pools || {})) {
+    for (const refs of Object.values(tierPools || {})) {
+      for (const ref of Array.isArray(refs) ? refs : []) {
+        if (!models.has(ref) && !out.includes(ref)) out.push(ref);
       }
-      if (kept.length) tiers[tier][name] = kept;
     }
   }
-  return { config: { ...config, tiers }, dropped };
+  return out;
 }

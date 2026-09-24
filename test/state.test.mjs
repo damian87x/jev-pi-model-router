@@ -32,6 +32,11 @@ test("our own switch does not pin", () => {
   assert.equal(onModelSelect(state, { source: "set", applying: true, ready: true }).pinned, false);
 });
 
+test("runtime setModel after routing on does not pin", () => {
+  const state = applyCommand(loadState(""), "on");
+  assert.equal(onModelSelect(state, { source: "set", applying: false, ready: true }).pinned, false);
+});
+
 test("a later manual pick pins", () => {
   const state = applyCommand(loadState(""), "on");
   assert.equal(onModelSelect(state, { source: "cycle", applying: false, ready: true }).pinned, true);
