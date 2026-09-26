@@ -1,6 +1,6 @@
 {
   "name": "jev-pi-model-router",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "pi extension: TypeSafe Jev picks the model for each turn, from pi's own models. No other CLI needed.",
   "type": "module",
   "license": "MIT",

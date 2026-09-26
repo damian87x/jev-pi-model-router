@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { apiKey, ask } from "../src/jev.mjs";
 import { missing, usableModels } from "../src/pools.mjs";
 import { classify, pick, prepare, QUESTIONS, risky, stickyKeep } from "../src/route.mjs";
+import { flushNotice, queueNotice } from "../src/notice.mjs";
 import { applyCommand, loadState, onModelSelect, shouldRoute, shouldSwitch } from "../src/state.mjs";
 
 const DIR = join(homedir(), ".pi", "agent", "jev-model-router");
@@ -85,6 +86,9 @@ export default function (pi) {
     if (next !== state && next.pinned) write(next);
   });
 
+  // Printed once all extensions have prepared the turn, together with other Jev notices.
+  pi.on("agent_start", async (_event, ctx) => flushNotice(ctx));
+
   pi.on("before_agent_start", async (event, ctx) => {
     ready = true;
     const state = read();
@@ -96,7 +100,7 @@ export default function (pi) {
     const absent = missing(config.tiers, models);
     if (absent.length && !missingWarned) {
       missingWarned = true;
-      ctx.ui.notify(`Jev router: pi cannot use ${absent.join(", ")}; skipped`, "info");
+      queueNotice(`Jev router: pi cannot use ${absent.join(", ")}; skipped`, "info");
     }
 
     const current = ctx.model ? `${ctx.model.provider}:${ctx.model.id}` : "";
@@ -106,14 +110,14 @@ export default function (pi) {
     } catch (e) {
       if (!warned) {
         warned = true;
-        ctx.ui.notify(`Jev router: no decision (${e.message}), kept current model`, "warning");
+        queueNotice(`Jev router: no decision (${e.message}), kept current model`, "warning");
       }
       return;
     }
 
     const verdict = classify(answers, { risk: risky(prompt), config });
     if (verdict.keep) {
-      if (state.mode === "shadow") ctx.ui.notify(`[Jev] kept ${current} · ${verdict.keep}`, "info");
+      if (state.mode === "shadow") queueNotice(`[Jev] kept ${current} · ${verdict.keep}`, "info");
       return;
     }
     const contextTokens = ctx.getContextUsage()?.tokens ?? 0;
@@ -125,18 +129,18 @@ export default function (pi) {
     });
     const label = `[Jev] ${verdict.tier} · ${verdict.specialty}`;
     if (!picked) {
-      ctx.ui.notify(`${label} · no pi model fits, kept ${current}`, "info");
+      queueNotice(`${label} · no pi model fits, kept ${current}`, "info");
       return;
     }
     if (stickyKeep(ctx.model, models.get(picked), contextTokens, config)) {
-      ctx.ui.notify(`${label} · large context, kept ${current}`, "info");
+      queueNotice(`${label} · large context, kept ${current}`, "info");
       return;
     }
     const [provider, modelId] = [picked.slice(0, picked.indexOf(":")), picked.slice(picked.indexOf(":") + 1)];
     const notice = `${label} → ${modelId} · confidence ${verdict.confidence.toFixed(2)}`;
     const decision = { routed: picked !== current, provider, model_id: modelId };
     if (!shouldSwitch(state, decision)) {
-      if (state.mode === "shadow") ctx.ui.notify(notice, "info");
+      if (state.mode === "shadow") queueNotice(notice, "info");
       return;
     }
     applying = true;
@@ -146,6 +150,6 @@ export default function (pi) {
     } finally {
       applying = false;
     }
-    ctx.ui.notify(ok ? notice : `${notice} · no auth, kept ${current}`, ok ? "info" : "warning");
+    queueNotice(ok ? notice : `${notice} · no auth, kept ${current}`, ok ? "info" : "warning");
   });
 }
