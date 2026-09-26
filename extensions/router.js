@@ -55,6 +55,9 @@ async function judge(text, cwd) {
 }
 
 export default function (pi) {
+  // Native subagents pin their model at launch; rerouting breaks model attestation.
+  if (process.env.PI_SUBAGENT_CHILD === "1") return;
+
   let warned = false;
   let missingWarned = false;
   let ready = false;
